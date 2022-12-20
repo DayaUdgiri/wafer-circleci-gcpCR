@@ -90,20 +90,50 @@ CMD [ "main.py" ]
 ```
 web: gunicorn main:app
 ```
+## to create requirements.txt
 
-## create a file ".circleci\config.yml" with following content
+```buildoutcfg
+pip freeze>requirements.txt
+```
+
+## initialize git repo
+```
+git init
+git add .
+git commit -m "first commit"
+git branch -M main
+git remote add origin <github_url>
+git push -u origin main
+```
+
+##Create a new Project in GCP
+#### Capture GOOGLE_PROJECT_ID
+#### Create a Service account for this project and generate the key in .jason format
+#### Convert the key into base64
+
+## Create an account at CircleCI and setup the project using this repo from github
+
+<a href="https://circleci.com/login/">Circle CI</a>
+
+
+## Select project setting in CircleCI and add below environment variable
+
+```
+GOOGLE_PROJECT_ID: The Project ID for your Google Cloud project. This value can be retrieved from the project card in the Google Cloud Dashboard.
+GCP_PROJECT_KEY: The base64 encoded result from the previous section.
+GOOGLE_COMPUTE_ZONE: The value of the region to target your deployment.
+```
+
+## In our Code Directory --> create a file ".circleci\config.yml" with following content
 ```
 version: 2.1
 orbs:
-  heroku: circleci/heroku@1.0.1
+  gcp-gcr: circleci/gcp-gcr@0.6.1
+  cloudrun: circleci/gcp-cloud-run@1.0.0
 jobs:
-  build-and-test:
-    executor: heroku/default
+  build_test:
     docker:
       - image: circleci/python:3.6.2-stretch-browsers
-        auth:
-          username: mydockerhub-user
-          password: $DOCKERHUB_PASSWORD  # context / project UI env-var reference
     steps:
       - checkout
       - restore_cache:
@@ -111,8 +141,9 @@ jobs:
       - run:
           name: Install Python deps in a venv
           command: |
-            echo 'export TAG=0.1.${CIRCLE_BUILD_NUM}' >> $BASH_ENV
-            echo 'export IMAGE_NAME=python-circleci-docker' >> $BASH_ENV
+#            echo 'export TAG=0.1.${CIRCLE_BUILD_NUM}' >> $BASH_ENV
+#            echo 'export IMAGE_NAME=${DOCKER_IMAGE_NAME}' >> $BASH_ENV  # from old dockerhub way
+            echo 'export PATH=~$PATH:~/.local/bin' >> $BASH_ENV && source $BASH_ENV    #from cci doc
             python3 -m venv venv
             . venv/bin/activate
             pip install --upgrade pip
@@ -130,92 +161,63 @@ jobs:
           destination: tr1
       - store_test_results:
           path: test-reports/
-      - setup_remote_docker:
-          version: 19.03.13
-      - run:
-          name: Build and push Docker image
-          command: |
-            docker build -t $DOCKERHUB_USER/$IMAGE_NAME:$TAG .
-            docker login -u $DOCKERHUB_USER -p $DOCKER_HUB_PASSWORD_USER docker.io
-            docker push $DOCKERHUB_USER/$IMAGE_NAME:$TAG
-  deploy:
-    executor: heroku/default
+  build_push_image_cloud_run_mangaged:
+    docker:
+      - image: circleci/python:3.6.2-stretch-browsers
     steps:
       - checkout
-      - run:
-          name: Storing previous commit
-          command: |
-            git rev-parse HEAD > ./commit.txt
-      - heroku/install
       - setup_remote_docker:
-          version: 18.06.0-ce
+          docker_layer_caching: false
       - run:
-          name: Pushing to heroku registry
+          name: Build app binary and Docker image
           command: |
-            heroku container:login
-            #heroku ps:scale web=1 -a $HEROKU_APP_NAME
-            heroku container:push web -a $HEROKU_APP_NAME
-            heroku container:release web -a $HEROKU_APP_NAME
-
+            echo 'export PATH=~$PATH:~/.local/bin' >> $BASH_ENV
+            echo ${GCP_PROJECT_KEY} | base64 --decode --ignore-garbage > $HOME/gcloud-service-key.json
+            echo 'export GOOGLE_CLOUD_KEYS=$(cat $HOME/gcloud-service-key.json)' >> $BASH_ENV
+            echo 'export TAG=${CIRCLE_SHA1}' >> $BASH_ENV
+            echo 'export IMAGE_NAME=$CIRCLE_PROJECT_REPONAME' >> $BASH_ENV && source $BASH_ENV
+            python3 -m venv venv
+            . venv/bin/activate
+            pip install --upgrade pip
+            pip install -r requirements.txt
+            docker build -t us.gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME -t us.gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME:$TAG .
+      - gcp-gcr/gcr-auth:
+          gcloud-service-key: GOOGLE_CLOUD_KEYS
+          google-project-id: GOOGLE_PROJECT_ID
+          google-compute-zone: GOOGLE_COMPUTE_ZONE
+      - gcp-gcr/push-image:
+          google-project-id: GOOGLE_PROJECT_ID
+          registry-url: "us.gcr.io"
+          image: $IMAGE_NAME
+      - cloudrun/deploy:
+          platform: "managed"
+          image: "us.gcr.io/$GOOGLE_PROJECT_ID/$IMAGE_NAME"
+          service-name: "orb-gcp-cloud-run"
+          region: $GOOGLE_COMPUTE_ZONE
+          unauthenticated: true
 workflows:
-  build-test-deploy:
+  build_test_deploy:
     jobs:
-      - build-and-test
-      - deploy:
+      - build_test
+      - build_push_image_cloud_run_mangaged:
           requires:
-            - build-and-test
+            - build_test
           filters:
             branches:
               only:
                 - main
 ```
-## to create requirements.txt
-
-```buildoutcfg
-pip freeze>requirements.txt
-```
-
-## initialize git repo
-
-```
-git init
-git add .
-git commit -m "first commit"
-git branch -M main
-git remote add origin <github_url>
-git push -u origin main
-```
-
-## create a account at circle ci
-
-<a href="https://circleci.com/login/">Circle CI</a>
-
-## setup your project 
-
-<a href="https://app.circleci.com/projects/github/Avnish327030/setup/"> Setup project </a>
-
-## Select project setting in CircleCI and below environment variable
-
-```
-DOCKERHUB_USER
-DOCKER_HUB_PASSWORD_USER
-HEROKU_API_KEY
-HEROKU_APP_NAME
-HEROKU_EMAIL_ADDRESS
-DOCKER_IMAGE_NAME=wafercircle3270303
-```
-
-
-## to update the modification
+## To update the modification from local to github repo
 
 ```
 git add .
-git commit -m "proper message"
+git commit -m "added config.yaml file"
 git push 
 ```
 
+## Above push will start the deployment in CircleCI
 
-## #docker login -u $DOCKERHUB_USER -p $DOCKER_HUB_PASSWORD_USER docker.io
+
 
     
     
