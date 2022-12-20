@@ -1,0 +1,7 @@
+.*
+*.egg-info/*
+*.ipynb
+venv/*
+.env
+../.idea/
+README.md
