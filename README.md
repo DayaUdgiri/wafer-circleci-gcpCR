@@ -212,7 +212,7 @@ workflows:
 ```
 git add .
 git commit -m "added config.yaml file"
-git push 
+git push -u origin main
 ```
 
 ## Above push will start the deployment in CircleCI
